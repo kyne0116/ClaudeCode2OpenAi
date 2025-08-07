@@ -1,6 +1,6 @@
 """
 配置管理模块
-支持从YAML文件和环境变量加载配置
+专门为Claude Code CLI转OpenAI API服务设计
 """
 import os
 import yaml
@@ -27,15 +27,22 @@ class ServerConfig(BaseModel):
     cors_origins: List[str] = ["*"]
 
 
-class BackendConfig(BaseModel):
+class ClaudeModelConfig(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
     
-    name: str
-    base_url: str
-    enabled: bool = True
-    timeout: int = 30
+    id: str  # Claude模型ID，如 claude-3-5-sonnet-20241022
+    name: str  # 映射到OpenAI格式的名称，如 gpt-4o
+    family: str  # 模型系列，如 claude-3.5
+
+
+class ClaudeConfig(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+    
+    name: str = "Claude (Anthropic)"
+    base_url: str = "https://api.anthropic.com/v1"
+    timeout: int = 60
     max_retries: int = 3
-    models: List[str] = []
+    models: List[ClaudeModelConfig] = []
 
 
 class MonitoringConfig(BaseModel):
@@ -61,22 +68,22 @@ class HealthCheckConfig(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
     
     endpoint: str = "/health"
-    check_backends: bool = True
+    check_claude: bool = True
 
 
 class AppConfig(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
     
     server: ServerConfig = ServerConfig()
-    backends: Dict[str, BackendConfig] = {}
-    api_keys: Dict[str, str] = {}
+    claude: ClaudeConfig = ClaudeConfig()
+    api_key: str = ""
     monitoring: MonitoringConfig = MonitoringConfig()
     rate_limit: RateLimitConfig = RateLimitConfig()
     health_check: HealthCheckConfig = HealthCheckConfig()
 
 
 class ConfigManager:
-    """配置管理器"""
+    """配置管理器 - 专门为Claude转OpenAI API服务设计"""
     
     def __init__(self, config_path: Optional[str] = None):
         self.config_path = config_path or "config.yaml"
@@ -135,40 +142,55 @@ class ConfigManager:
         if os.getenv("DEBUG"):
             self._config.server.debug = os.getenv("DEBUG").lower() == "true"
         
-        # API密钥环境变量覆盖
-        for backend_name in self._config.backends.keys():
-            env_key = f"{backend_name.upper()}_API_KEY"
-            if os.getenv(env_key):
-                self._config.api_keys[backend_name] = os.getenv(env_key)
+        # Claude API密钥环境变量覆盖
+        if os.getenv("CLAUDE_API_KEY"):
+            self._config.api_key = os.getenv("CLAUDE_API_KEY")
     
-    def get_backend_config(self, backend_name: str) -> Optional[BackendConfig]:
-        """获取指定后端配置"""
+    def get_claude_config(self) -> ClaudeConfig:
+        """获取Claude配置"""
         config = self.load_config()
-        return config.backends.get(backend_name)
+        return config.claude
     
-    def get_enabled_backends(self) -> Dict[str, BackendConfig]:
-        """获取启用的后端配置"""
+    def get_api_key(self) -> str:
+        """获取Claude API密钥"""
         config = self.load_config()
-        return {name: backend for name, backend in config.backends.items() if backend.enabled}
+        return config.api_key
     
-    def get_api_key(self, backend_name: str) -> Optional[str]:
-        """获取指定后端的API密钥"""
+    def get_openai_model_mapping(self) -> Dict[str, str]:
+        """获取OpenAI模型到Claude模型的映射"""
         config = self.load_config()
-        return config.api_keys.get(backend_name)
+        mapping = {}
+        for model in config.claude.models:
+            mapping[model.name] = model.id
+        return mapping
+    
+    def get_claude_to_openai_mapping(self) -> Dict[str, str]:
+        """获取Claude模型到OpenAI模型的映射"""
+        config = self.load_config()
+        mapping = {}
+        for model in config.claude.models:
+            mapping[model.id] = model.name
+        return mapping
+    
+    def get_supported_models(self) -> List[str]:
+        """获取支持的OpenAI格式模型列表"""
+        config = self.load_config()
+        return [model.name for model in config.claude.models]
     
     def validate_config(self) -> List[str]:
         """验证配置有效性，返回错误信息列表"""
         errors = []
         config = self.load_config()
         
-        # 检查启用的后端是否有API密钥
-        for name, backend in config.backends.items():
-            if backend.enabled and not self.get_api_key(name):
-                errors.append(f"后端 '{name}' 已启用但缺少API密钥")
+        # 不再需要API密钥验证，因为使用本地Claude Code CLI
         
         # 检查端口范围
         if not (1 <= config.server.port <= 65535):
             errors.append(f"端口号 {config.server.port} 无效")
+        
+        # 检查模型配置
+        if not config.claude.models:
+            errors.append("未配置任何Claude模型")
         
         return errors
 

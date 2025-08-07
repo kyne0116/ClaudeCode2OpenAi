@@ -1,24 +1,20 @@
 """
-AI代理服务主程序
-支持多后端AI服务的统一接口代理
+真正的Claude Code CLI to OpenAI API转换服务
+使用本地Claude Code CLI的真实推理能力
 """
-import asyncio
 import time
 from contextlib import asynccontextmanager
 from typing import Dict, Any, Optional
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
-import httpx
+from fastapi.responses import JSONResponse
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 
-from src.config import get_config, config_manager
-from src.services.backend_manager import BackendManager
-from src.services.request_logger import RequestLogger
+from src.config import get_config
+from src.services.claude_processor import RealClaudeProcessor
 from src.services.rate_limiter import RateLimiter
 from src.services.metrics import MetricsCollector
 
@@ -31,7 +27,7 @@ def setup_logging():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler('app.log', encoding='utf-8')
+            logging.FileHandler('claude_api.log', encoding='utf-8')
         ]
     )
 
@@ -39,8 +35,7 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 # 全局组件
-backend_manager: Optional[BackendManager] = None
-request_logger: Optional[RequestLogger] = None
+claude_processor: Optional[RealClaudeProcessor] = None
 rate_limiter: Optional[RateLimiter] = None
 metrics_collector: Optional[MetricsCollector] = None
 
@@ -48,46 +43,35 @@ metrics_collector: Optional[MetricsCollector] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global backend_manager, request_logger, rate_limiter, metrics_collector
+    global claude_processor, rate_limiter, metrics_collector
     
-    logger.info("正在启动AI代理服务...")
-    
-    # 验证配置
-    errors = config_manager.validate_config()
-    if errors:
-        logger.error("配置验证失败:")
-        for error in errors:
-            logger.error(f"  - {error}")
-        raise RuntimeError("配置验证失败，服务无法启动")
+    logger.info("🚀 启动真正的Claude Code CLI转OpenAI API服务...")
     
     # 初始化组件
     config = get_config()
-    backend_manager = BackendManager()
-    request_logger = RequestLogger()
+    claude_processor = RealClaudeProcessor()
     rate_limiter = RateLimiter(config.rate_limit)
     metrics_collector = MetricsCollector()
     
-    logger.info(f"已启用后端: {list(config_manager.get_enabled_backends().keys())}")
-    logger.info(f"服务将在 {config.server.host}:{config.server.port} 启动")
+    logger.info("✅ 真正的Claude处理器已就绪")
+    logger.info(f"🌐 服务将在 {config.server.host}:{config.server.port} 启动")
+    logger.info("💡 现在使用真正的Claude推理能力处理请求")
     
     yield
     
-    logger.info("正在关闭AI代理服务...")
-    await backend_manager.close()
+    logger.info("🔄 正在关闭Claude API服务...")
 
 
 # 创建FastAPI应用
 app = FastAPI(
-    title="AI代理服务",
-    description="支持多后端AI服务的统一接口代理",
-    version="1.0.0",
+    title="Claude Code CLI to OpenAI API",
+    description="使用真正的Claude Code CLI推理能力的OpenAI兼容API服务",
+    version="2.0.0",
     lifespan=lifespan
 )
 
-# 添加中间件
+# 添加CORS中间件
 config = get_config()
-
-# CORS中间件
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.server.cors_origins,
@@ -101,13 +85,11 @@ app.add_middleware(
 async def log_requests(request: Request, call_next):
     start_time = time.time()
     
-    # 记录请求
     if config.monitoring.log_requests:
-        logger.info(f"请求: {request.method} {request.url}")
+        logger.info(f"📥 请求: {request.method} {request.url}")
     
     response = await call_next(request)
     
-    # 记录响应时间
     process_time = time.time() - start_time
     response.headers["X-Process-Time"] = str(process_time)
     
@@ -121,7 +103,7 @@ async def log_requests(request: Request, call_next):
         )
     
     if config.monitoring.log_requests:
-        logger.info(f"响应: {response.status_code} ({process_time:.3f}s)")
+        logger.info(f"📤 响应: {response.status_code} ({process_time:.3f}s)")
     
     return response
 
@@ -137,41 +119,50 @@ async def check_rate_limit(request: Request):
             )
 
 
+@app.get("/")
+async def root():
+    """根路径信息"""
+    return {
+        "service": "Claude Code CLI to OpenAI API",
+        "version": "2.0.0",
+        "description": "使用真正Claude推理能力的OpenAI兼容API服务",
+        "endpoints": {
+            "chat": "/v1/chat/completions",
+            "completions": "/v1/completions", 
+            "models": "/v1/models",
+            "health": "/health"
+        },
+        "powered_by": "真正的Claude Code CLI"
+    }
+
+
 @app.get("/health")
 async def health_check():
     """健康检查端点"""
-    config = get_config()
     health_status = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.0.0"
+        "version": "2.0.0",
+        "service": "real-claude-processor"
     }
     
-    if config.health_check.check_backends and backend_manager:
-        backend_health = await backend_manager.check_health()
-        health_status["backends"] = backend_health
+    if claude_processor:
+        claude_health = await claude_processor.check_health()
+        health_status["claude"] = claude_health
         
-        # 如果有后端不健康，整体状态为降级
-        if any(not status["healthy"] for status in backend_health.values()):
+        if not claude_health.get("healthy", False):
             health_status["status"] = "degraded"
     
     return health_status
 
 
-@app.get("/backends")
-async def list_backends():
-    """列出可用的后端服务"""
-    enabled_backends = config_manager.get_enabled_backends()
-    backends_info = {}
+@app.get("/v1/models")
+async def list_models():
+    """列出可用模型（OpenAI格式）"""
+    if not claude_processor:
+        raise HTTPException(status_code=503, detail="Claude处理器未初始化")
     
-    for name, backend in enabled_backends.items():
-        backends_info[name] = {
-            "name": backend.name,
-            "models": backend.models,
-            "enabled": backend.enabled
-        }
-    
-    return {"backends": backends_info}
+    return claude_processor.list_models()
 
 
 @app.post("/v1/chat/completions")
@@ -179,49 +170,33 @@ async def chat_completions(
     request: Request,
     _: None = Depends(check_rate_limit)
 ):
-    """ChatGPT兼容的聊天完成接口"""
+    """聊天完成接口 - 使用真正的Claude推理"""
+    if not claude_processor:
+        raise HTTPException(status_code=503, detail="Claude处理器未初始化")
+    
     try:
         request_data = await request.json()
         
-        # 提取模型信息
-        model = request_data.get("model", "")
-        if not model:
-            raise HTTPException(status_code=400, detail="模型参数不能为空")
+        # 提取请求参数
+        messages = request_data.get("messages", [])
         
-        # 确定使用哪个后端
-        backend_name = await backend_manager.select_backend(model)
-        if not backend_name:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"未找到支持模型 '{model}' 的后端服务"
-            )
+        if not messages:
+            raise HTTPException(status_code=400, detail="消息不能为空")
         
-        # 记录请求
-        if request_logger:
-            await request_logger.log_request(request_data, backend_name)
+        logger.info(f"🧠 开始Claude推理处理")
         
-        # 转发请求到后端
-        response_data = await backend_manager.forward_request(
-            backend_name, 
-            "/chat/completions", 
-            request_data
-        )
+        # 使用真正的Claude处理器进行推理（不需要model参数）
+        response_data = await claude_processor.process_chat_completion(messages=messages)
         
-        # 记录响应
-        if request_logger and config.monitoring.log_responses:
-            await request_logger.log_response(response_data)
+        logger.info(f"✅ Claude推理完成，生成{response_data['usage']['completion_tokens']}个token")
         
         return response_data
         
-    except httpx.HTTPStatusError as e:
-        logger.error(f"后端请求失败: {e}")
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"后端服务错误: {e.response.text}"
-        )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"请求处理失败: {e}")
-        raise HTTPException(status_code=500, detail="内部服务器错误")
+        logger.error(f"❌ 聊天完成处理失败: {e}")
+        raise HTTPException(status_code=500, detail=f"内部处理错误: {str(e)}")
 
 
 @app.post("/v1/completions")
@@ -229,53 +204,48 @@ async def completions(
     request: Request,
     _: None = Depends(check_rate_limit)
 ):
-    """文本完成接口"""
+    """文本完成接口 - 转换为聊天格式后用Claude处理"""
+    if not claude_processor:
+        raise HTTPException(status_code=503, detail="Claude处理器未初始化")
+    
     try:
         request_data = await request.json()
         
-        # 提取模型信息
-        model = request_data.get("model", "")
-        if not model:
-            raise HTTPException(status_code=400, detail="模型参数不能为空")
+        # 提取参数
+        prompt = request_data.get("prompt", "")
         
-        # 确定使用哪个后端
-        backend_name = await backend_manager.select_backend(model)
-        if not backend_name:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"未找到支持模型 '{model}' 的后端服务"
-            )
+        if not prompt:
+            raise HTTPException(status_code=400, detail="提示不能为空")
         
-        # 转发请求到后端
-        response_data = await backend_manager.forward_request(
-            backend_name, 
-            "/completions", 
-            request_data
-        )
+        # 转换为聊天格式
+        messages = [{"role": "user", "content": prompt}]
         
-        return response_data
+        logger.info(f"🔄 文本完成请求转换为聊天格式")
         
+        # 使用聊天完成处理
+        chat_response = await claude_processor.process_chat_completion(messages=messages)
+        
+        # 转换回文本完成格式
+        completion_response = {
+            "id": chat_response["id"].replace("chatcmpl", "cmpl"),
+            "object": "text_completion", 
+            "created": chat_response["created"],
+            "model": "claude-via-openai-api",
+            "choices": [{
+                "text": chat_response["choices"][0]["message"]["content"],
+                "index": 0,
+                "finish_reason": chat_response["choices"][0]["finish_reason"]
+            }],
+            "usage": chat_response["usage"]
+        }
+        
+        return completion_response
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"请求处理失败: {e}")
-        raise HTTPException(status_code=500, detail="内部服务器错误")
-
-
-@app.get("/v1/models")
-async def list_models():
-    """列出可用模型"""
-    enabled_backends = config_manager.get_enabled_backends()
-    models = []
-    
-    for backend_name, backend in enabled_backends.items():
-        for model in backend.models:
-            models.append({
-                "id": model,
-                "object": "model",
-                "created": int(time.time()),
-                "owned_by": backend_name
-            })
-    
-    return {"object": "list", "data": models}
+        logger.error(f"❌ 文本完成处理失败: {e}")
+        raise HTTPException(status_code=500, detail=f"内部处理错误: {str(e)}")
 
 
 @app.get("/stats")
@@ -285,17 +255,22 @@ async def get_stats():
         return {"message": "指标收集未启用"}
     
     stats = metrics_collector.get_stats()
+    stats["processor"] = "real-claude-processor"
+    stats["capabilities"] = "full_reasoning"
     return stats
 
 
-@app.get("/metrics")
+@app.get("/metrics") 
 async def get_metrics():
     """获取Prometheus格式指标"""
     if not metrics_collector:
-        return Response("指标收集未启用", media_type="text/plain")
+        return JSONResponse(
+            content="指标收集未启用",
+            media_type="text/plain"
+        )
     
     metrics = metrics_collector.get_prometheus_metrics()
-    return Response(metrics, media_type="text/plain")
+    return JSONResponse(content=metrics, media_type="text/plain")
 
 
 @app.exception_handler(HTTPException)
@@ -306,7 +281,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         content={
             "error": {
                 "message": exc.detail,
-                "type": "api_error",
+                "type": "api_error", 
                 "code": exc.status_code
             }
         }
@@ -316,7 +291,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     """通用异常处理"""
-    logger.error(f"未处理的异常: {exc}")
+    logger.error(f"❌ 未处理的异常: {exc}")
     return JSONResponse(
         status_code=500,
         content={
@@ -332,6 +307,8 @@ async def general_exception_handler(request: Request, exc: Exception):
 def main():
     """主启动函数"""
     config = get_config()
+    logger.info("🎯 使用真正的Claude Code CLI推理能力启动服务")
+    
     uvicorn.run(
         "main:app",
         host=config.server.host,

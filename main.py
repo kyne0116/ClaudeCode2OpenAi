@@ -185,8 +185,16 @@ async def chat_completions(
         
         logger.info(f"🧠 开始Claude推理处理")
         
-        # 使用真正的Claude处理器进行推理（不需要model参数）
-        response_data = await claude_processor.process_chat_completion(messages=messages)
+        # 提取客户端信息用于会话管理
+        client_ip = request.client.host if request.client else "unknown"
+        user_agent = request.headers.get("User-Agent", "")
+        
+        # 使用真正的Claude处理器进行推理，传递客户端信息支持上下文管理
+        response_data = await claude_processor.process_chat_completion(
+            messages=messages,
+            client_ip=client_ip,
+            user_agent=user_agent
+        )
         
         logger.info(f"✅ Claude推理完成，生成{response_data['usage']['completion_tokens']}个token")
         
@@ -222,8 +230,16 @@ async def completions(
         
         logger.info(f"🔄 文本完成请求转换为聊天格式")
         
-        # 使用聊天完成处理
-        chat_response = await claude_processor.process_chat_completion(messages=messages)
+        # 提取客户端信息用于会话管理
+        client_ip = request.client.host if request.client else "unknown"
+        user_agent = request.headers.get("User-Agent", "")
+        
+        # 使用聊天完成处理，传递客户端信息支持上下文管理
+        chat_response = await claude_processor.process_chat_completion(
+            messages=messages,
+            client_ip=client_ip,
+            user_agent=user_agent
+        )
         
         # 转换回文本完成格式
         completion_response = {

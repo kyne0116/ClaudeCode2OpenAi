@@ -39,3 +39,11 @@ rate_limit:
 health_check:
   endpoint: "/health"
   check_claude: true
+
+# 上下文管理配置
+context:
+  enabled: true
+  max_context_messages: 20  # 每个会话最大消息数
+  session_timeout_minutes: 30  # 会话超时时间（分钟）
+  max_sessions: 1000  # 最大会话数
+  cleanup_interval_minutes: 10  # 清理间隔（分钟）

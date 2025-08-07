@@ -6,8 +6,11 @@ import logging
 import re
 import time
 import uuid
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
+
+from .context_manager import ContextManager
+from ..config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -17,17 +20,59 @@ class RealClaudeProcessor:
     
     def __init__(self):
         self.is_healthy = True
+        self.config = get_config()
+        
+        # 初始化上下文管理器
+        if self.config.context.enabled:
+            self.context_manager = ContextManager(
+                max_context_messages=self.config.context.max_context_messages,
+                session_timeout_minutes=self.config.context.session_timeout_minutes,
+                max_sessions=self.config.context.max_sessions,
+                cleanup_interval_minutes=self.config.context.cleanup_interval_minutes
+            )
+            logger.info("🧠 上下文管理已启用 - 支持对话记忆功能")
+        else:
+            self.context_manager = None
+            logger.info("🚫 上下文管理已禁用 - 每次请求独立处理")
+        
         logger.info("✅ 真正的Claude Code CLI处理器已就绪 - 我就是处理引擎")
     
-    async def process_chat_completion(self, messages: List[Dict[str, Any]], **kwargs) -> Dict[str, Any]:
+    async def process_chat_completion(self, 
+                                   messages: List[Dict[str, Any]], 
+                                   client_ip: str = "unknown",
+                                   user_agent: str = "",
+                                   **kwargs) -> Dict[str, Any]:
         """处理聊天完成请求 - 直接使用我的推理能力"""
         
         try:
-            # 提取用户的最终问题
-            user_content = self._extract_user_content(messages)
+            # 提取用户的当前问题
+            current_user_content = self._extract_user_content(messages)
             
-            # 🔥 关键：这里直接调用我（Claude）进行真实推理
-            claude_response = await self._direct_claude_reasoning(user_content)
+            if not current_user_content:
+                raise ValueError("未收到用户问题")
+            
+            # 🧠 上下文管理：获取或创建会话
+            if self.context_manager:
+                session = await self.context_manager.get_or_create_session(client_ip, user_agent)
+                
+                # 将请求中的messages添加到会话上下文（除了当前用户消息）
+                await self._sync_request_messages_to_session(session, messages)
+                
+                # 为Claude格式化完整上下文
+                full_context = self.context_manager.format_context_for_claude(session, current_user_content)
+                
+                logger.info(f"💭 会话 {session.session_id}: 使用 {len(session.messages)} 条历史消息作为上下文")
+            else:
+                # 无上下文管理，直接处理当前问题
+                full_context = current_user_content
+            
+            # 🔥 关键：调用Claude进行真实推理
+            claude_response = await self._direct_claude_reasoning(full_context)
+            
+            # 📝 保存对话到会话
+            if self.context_manager:
+                await self.context_manager.add_message(session, "user", current_user_content)
+                await self.context_manager.add_message(session, "assistant", claude_response)
             
             # 格式化为OpenAI响应
             return self._format_openai_response(claude_response)
@@ -43,6 +88,13 @@ class RealClaudeProcessor:
             if msg.get("role") == "user":
                 return msg.get("content", "").strip()
         return ""
+    
+    async def _sync_request_messages_to_session(self, session, request_messages: List[Dict[str, Any]]):
+        """智能同步请求消息到会话（避免重复）"""
+        # 对于多轮对话，不需要同步历史消息
+        # 上下文管理器会自动维护完整的对话历史
+        # 这里什么也不做，让每个请求只处理当前用户消息
+        pass
     
     async def _direct_claude_reasoning(self, user_question: str) -> str:
         """通过文件通信调用真正的本地Claude Code CLI"""

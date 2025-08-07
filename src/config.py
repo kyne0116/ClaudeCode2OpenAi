@@ -71,6 +71,16 @@ class HealthCheckConfig(BaseModel):
     check_claude: bool = True
 
 
+class ContextConfig(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+    
+    enabled: bool = True
+    max_context_messages: int = 20
+    session_timeout_minutes: int = 30
+    max_sessions: int = 1000
+    cleanup_interval_minutes: int = 10
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
     
@@ -80,6 +90,7 @@ class AppConfig(BaseModel):
     monitoring: MonitoringConfig = MonitoringConfig()
     rate_limit: RateLimitConfig = RateLimitConfig()
     health_check: HealthCheckConfig = HealthCheckConfig()
+    context: ContextConfig = ContextConfig()
 
 
 class ConfigManager:

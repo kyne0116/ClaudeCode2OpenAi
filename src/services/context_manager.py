@@ -118,33 +118,91 @@ class ContextManager:
         ]
     
     def format_context_for_claude(self, session: Session, new_question: str) -> str:
-        """为Claude CLI格式化完整对话上下文"""
+        """为Claude CLI格式化优化的对话上下文"""
         if not session.messages:
             return new_question
         
-        # 构建完整的对话历史
+        # 🔥 优化策略：智能上下文管理
+        if len(session.messages) <= 4:  # 前2轮对话，保持完整上下文
+            return self._format_full_context(session.messages, new_question)
+        else:  # 多轮对话，使用压缩上下文
+            return self._format_compressed_context(session.messages, new_question)
+    
+    def _format_full_context(self, messages: list, new_question: str) -> str:
+        """格式化完整上下文（用于短对话）"""
         context_lines = ["# 对话历史", ""]
         
-        for i, msg in enumerate(session.messages, 1):
+        for i, msg in enumerate(messages, 1):
             if msg.role == "user":
                 context_lines.append(f"## 用户问题 {i}")
                 context_lines.append(msg.content)
                 context_lines.append("")
             elif msg.role == "assistant":
                 context_lines.append(f"## Claude回答 {i}")
-                context_lines.append(msg.content)
+                # 限制回答长度，避免上下文过长
+                content = msg.content[:200] + ("..." if len(msg.content) > 200 else "")
+                context_lines.append(content)
                 context_lines.append("")
         
-        # 添加当前问题
         context_lines.extend([
             f"## 当前问题",
             new_question,
             "",
             "---",
-            "请基于以上对话历史，回答当前问题。如果当前问题与之前的对话相关，请考虑上下文信息。"
+            "请基于以上对话历史回答当前问题。"
         ])
         
         return "\n".join(context_lines)
+    
+    def _format_compressed_context(self, messages: list, new_question: str) -> str:
+        """格式化压缩上下文（用于长对话）"""
+        # 策略：保留最近3轮对话 + 早期关键信息摘要
+        recent_messages = messages[-6:]  # 最近3轮（6条消息）
+        
+        context_lines = ["# 对话摘要", ""]
+        
+        # 添加早期信息摘要
+        if len(messages) > 6:
+            early_messages = messages[:-6]
+            summary_info = self._extract_key_info(early_messages)
+            if summary_info:
+                context_lines.append("## 早期对话要点")
+                context_lines.append(summary_info)
+                context_lines.append("")
+        
+        # 添加最近对话
+        context_lines.append("## 最近对话")
+        for i, msg in enumerate(recent_messages):
+            if msg.role == "user":
+                context_lines.append(f"用户: {msg.content}")
+            else:
+                # 压缩Assistant回复
+                content = msg.content[:150] + ("..." if len(msg.content) > 150 else "")
+                context_lines.append(f"Claude: {content}")
+        
+        context_lines.extend([
+            "",
+            f"## 当前问题",
+            new_question,
+            "",
+            "---",
+            "请基于对话摘要和最近对话回答当前问题。"
+        ])
+        
+        return "\n".join(context_lines)
+    
+    def _extract_key_info(self, messages: list) -> str:
+        """从早期消息中提取关键信息"""
+        key_info = []
+        
+        for msg in messages:
+            if msg.role == "user":
+                # 提取可能的关键信息（姓名、年龄、职业等）
+                content = msg.content
+                if any(keyword in content for keyword in ["我叫", "我是", "我的名字", "我今年", "我住在"]):
+                    key_info.append(content[:100])
+        
+        return "; ".join(key_info[:3])  # 最多保留3条关键信息
     
     async def _cleanup_expired_sessions(self):
         """清理过期会话"""
